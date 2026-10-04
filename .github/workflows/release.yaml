@@ -1,5 +1,5 @@
 ---
-name: "Release"
+name: Tag
 
 on:
   workflow_dispatch:
@@ -9,43 +9,31 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: tag
+  cancel-in-progress: false
+
 jobs:
-  release:
-    name: Release
+  tag:
+    name: Create tag
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Generate Token
-        uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: "${{ secrets.BOT_APP_ID }}"
-          private-key: "${{ secrets.BOT_APP_PRIVATE_KEY }}"
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          token: "${{ steps.app-token.outputs.token }}"
-
-      - name: Create Release
+      - name: Create tag
         shell: bash
-        env:
-          GITHUB_TOKEN: "${{ steps.app-token.outputs.token }}"
         run: |
-          # Retrieve previous release tag
-          previous_tag="$(gh release list --limit 1 | awk '{ print $1 }')"
-          previous_major="${previous_tag%%\.*}"
-          previous_minor="${previous_tag#*.}"
-          previous_minor="${previous_minor%.*}"
-          previous_patch="${previous_tag##*.}"
-          # Determine next release tag
-          next_major_minor="$(date +'%Y').$(date +'%-m')"
-          if [[ "${previous_major}.${previous_minor}" == "${next_major_minor}" ]]; then
-              echo "Month release already exists for year, incrementing patch number by 1"
-              next_patch="$((previous_patch + 1))"
-          else
-              echo "Month release does not exist for year, setting patch number to 0"
-              next_patch="0"
+          set -Eeuo pipefail
+
+          tag="v$(date -u +'%Y.%m.%d')"
+          ref="repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}"
+
+          if gh api "$ref" >/dev/null 2>&1; then
+            echo "Tag $tag already exists"
+            exit 0
           fi
-          # Create release
-          release_tag="${next_major_minor}.${next_patch}"
-          gh release create "${release_tag}" --title="${release_tag}" --generate-notes
+
+          echo "Creating tag $tag at $GITHUB_SHA"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f "ref=refs/tags/${tag}" \
+            -f "sha=${GITHUB_SHA}"

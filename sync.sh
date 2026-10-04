@@ -1,75 +1,51 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-current_dir=$(pwd)
-source_dir="$current_dir/.config"
-target_dir="$HOME/.config"
-backup_dir="$HOME/.config_bak"
+repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+config_source="$repo_dir/.config"
+home_config="$HOME/.config"
+backup_root="$HOME/.dotfiles-backup-$(date +%Y%m%d-%H%M%S)"
 
-# Function to backup existing .config directory
-backup_config() {
-  if [ -d "$target_dir" ]; then
-    if [ -d "$backup_dir" ]; then
-      echo "Backup directory $backup_dir already exists, deleting..."
-      rm -rf "$backup_dir"
-    fi
+[[ -d "$config_source" ]] || { echo "Missing $config_source" >&2; exit 1; }
 
-    if cp -r "$target_dir" "$backup_dir"; then
-      echo "Backing up $target_dir to $backup_dir"
-    else
-      echo "Failed to create backup. Exiting."
-      exit 1
-    fi
+backup_target() {
+  local target="$1"
+  local relative="${target#"$HOME"/}"
+  local backup="$backup_root/$relative"
+
+  [[ -e "$target" || -L "$target" ]] || return 0
+  mkdir -p -- "$(dirname -- "$backup")"
+  mv -- "$target" "$backup"
+  echo "Backed up $target -> $backup"
+}
+
+link_file() {
+  local source="$1"
+  local target="$2"
+
+  mkdir -p -- "$(dirname -- "$target")"
+  if [[ -L "$target" && "$(readlink -- "$target")" == "$source" ]]; then
+    return 0
   fi
+  backup_target "$target"
+  ln -s -- "$source" "$target"
+  echo "Linked $target -> $source"
 }
 
-# Function to create a symbolic link
-create_symlink() {
-  source_path=$1
-  target_path=$2
+while IFS= read -r -d '' source; do
+  relative="${source#"$config_source"/}"
+  link_file "$source" "$home_config/$relative"
+done < <(find "$config_source" -type f -print0)
 
-  # Check if the item exists in the target directory
-  if [ -e "$target_path" ]; then
-    echo "Found $target_path, deleting..."
-    rm -rf "$target_path"
-  fi
+link_file "$repo_dir/.bashrc" "$HOME/.bashrc"
 
-  # Create the symbolic link
-  ln -s "$source_path" "$target_path"
-  echo "Created symlink for $source_path 🔗 $target_path"
-}
-
-# Function to process files and create symbolic links
-process_files() {
-  # Ensure the target directory exists
-  mkdir -p "$target_dir"
-
-  # Find all files in the source .config directory
-  find "$source_dir" -type f | while read -r source_path; do
-    # Get the relative path of the source file
-    relative_path="${source_path#"$source_dir"/}"
-    target_path="$target_dir/$relative_path"
-    target_subdir=$(dirname "$target_path")
-
-    # Create the target subdirectory if it doesn't exist
-    mkdir -p "$target_subdir"
-
-    # Call the function to create the symbolic link
-    create_symlink "$source_path" "$target_path"
-  done
-}
-
-# Ensure the source directory exists
-if [ ! -d "$source_dir" ]; then
-  echo "Source directory $source_dir does not exist."
-  exit 1
+# Remove the legacy local tmux configuration after backing it up.
+if [[ -e "$home_config/tmux" || -L "$home_config/tmux" ]]; then
+  backup_target "$home_config/tmux"
+  echo "Removed legacy tmux configuration; backup is under $backup_root"
 fi
 
-# Call the backup function
-backup_config
-
-# Call the function to process files and create symbolic links
-process_files
-
-# make fish default shell
-# shellcheck disable=SC2046
-chsh -s $(which fish)
+if [[ -d "$backup_root" ]]; then
+  echo "Backups created at: $backup_root"
+fi
+echo "Bash dotfiles synchronized successfully."
